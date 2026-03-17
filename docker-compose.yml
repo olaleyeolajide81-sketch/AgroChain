@@ -1,0 +1,326 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: agrochain-postgres
+    environment:
+      POSTGRES_DB: agrochain
+      POSTGRES_USER: agrochain
+      POSTGRES_PASSWORD: agrochain123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - agrochain-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agrochain -d agrochain"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: agrochain-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - agrochain-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: ./backend/api-gateway
+      dockerfile: Dockerfile
+    container_name: agrochain-api-gateway
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://agrochain:agrochain123@postgres:5432/agrochain
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production
+      STELLAR_NETWORK: testnet
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - agrochain-network
+    volumes:
+      - ./backend/api-gateway:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Auth Service
+  auth-service:
+    build:
+      context: ./backend/auth-service
+      dockerfile: Dockerfile
+    container_name: agrochain-auth-service
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DATABASE_URL: postgresql://agrochain:agrochain123@postgres:5432/agrochain
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - agrochain-network
+    volumes:
+      - ./backend/auth-service:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Oracle Service
+  oracle-service:
+    build:
+      context: ./backend/oracle-service
+      dockerfile: Dockerfile
+    container_name: agrochain-oracle-service
+    environment:
+      NODE_ENV: development
+      PORT: 3002
+      DATABASE_URL: postgresql://agrochain:agrochain123@postgres:5432/agrochain
+      STELLAR_NETWORK: testnet
+      STELLAR_SECRET_KEY: your-stellar-secret-key
+    ports:
+      - "3002:3002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - agrochain-network
+    volumes:
+      - ./backend/oracle-service:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Notification Service
+  notification-service:
+    build:
+      context: ./backend/notification-service
+      dockerfile: Dockerfile
+    container_name: agrochain-notification-service
+    environment:
+      NODE_ENV: development
+      PORT: 3003
+      DATABASE_URL: postgresql://agrochain:agrochain123@postgres:5432/agrochain
+      REDIS_URL: redis://redis:6379
+      EMAIL_SERVICE_API_KEY: your-email-service-api-key
+    ports:
+      - "3003:3003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - agrochain-network
+    volumes:
+      - ./backend/notification-service:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Farmer Dashboard
+  farmer-dashboard:
+    build:
+      context: ./frontend/farmer-dashboard
+      dockerfile: Dockerfile
+    container_name: agrochain-farmer-dashboard
+    environment:
+      NODE_ENV: development
+      REACT_APP_API_URL: http://localhost:3000
+      REACT_APP_STELLAR_NETWORK: testnet
+    ports:
+      - "3100:3100"
+    depends_on:
+      - api-gateway
+    networks:
+      - agrochain-network
+    volumes:
+      - ./frontend/farmer-dashboard:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Processor Portal
+  processor-portal:
+    build:
+      context: ./frontend/processor-portal
+      dockerfile: Dockerfile
+    container_name: agrochain-processor-portal
+    environment:
+      NODE_ENV: development
+      REACT_APP_API_URL: http://localhost:3000
+      REACT_APP_STELLAR_NETWORK: testnet
+    ports:
+      - "3200:3200"
+    depends_on:
+      - api-gateway
+    networks:
+      - agrochain-network
+    volumes:
+      - ./frontend/processor-portal:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # MQTT Broker for IoT
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: agrochain-mosquitto
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_logs:/mosquitto/log
+      - ./infrastructure/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+    networks:
+      - agrochain-network
+
+  # IoT Gateway
+  iot-gateway:
+    build:
+      context: ./iot/gateway-software
+      dockerfile: Dockerfile
+    container_name: agrochain-iot-gateway
+    environment:
+      PYTHONPATH: /app
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: 1883
+      API_BASE_URL: http://api-gateway:3000
+      DATABASE_URL: postgresql://agrochain:agrochain123@postgres:5432/agrochain
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "4000:4000"
+    depends_on:
+      - api-gateway
+      - mosquitto
+    networks:
+      - agrochain-network
+    volumes:
+      - ./iot/gateway-software:/app
+      - iot_data:/app/data
+    command: python gateway.py
+
+  # Prometheus Monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: agrochain-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - agrochain-network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+
+  # Grafana Dashboard
+  grafana:
+    image: grafana/grafana:latest
+    container_name: agrochain-grafana
+    ports:
+      - "3004:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - agrochain-network
+    depends_on:
+      - prometheus
+
+  # Stellar Testnet (for development)
+  stellar-testnet:
+    image: stellar/stellar-core:latest
+    container_name: agrochain-stellar-testnet
+    ports:
+      - "11626:11626"
+      - "8000:8000"
+    volumes:
+      - stellar_data:/data
+    networks:
+      - agrochain-network
+    command:
+      - '--conf /stellar-core/etc/stellar-core.cfg'
+      - '--database /data/stellar-core.db'
+      - '--http-port 8000'
+      - '--public-http-port 11626'
+      - '--network-passphrase "Standalone Network ; February 2017"'
+      - '--force-scp'
+
+  # Test Runner
+  test-runner:
+    build:
+      context: ./tests
+      dockerfile: Dockerfile
+    container_name: agrochain-test-runner
+    environment:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://agrochain:agrochain123@postgres:5432/agrochain_test
+      REDIS_URL: redis://redis:6379
+      STELLAR_NETWORK: standalone
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
+    networks:
+      - agrochain-network
+    volumes:
+      - ./tests:/app
+    command: npm run test:e2e
+    profiles:
+      - testing
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  mosquitto_data:
+    driver: local
+  mosquitto_logs:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  stellar_data:
+    driver: local
+  iot_data:
+    driver: local
+
+networks:
+  agrochain-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

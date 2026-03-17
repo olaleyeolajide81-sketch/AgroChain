@@ -1,0 +1,328 @@
+name: Deploy
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+      version:
+        description: 'Version to deploy (optional)'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: agrochain
+
+jobs:
+  # Build and push Docker images
+  build-and-push:
+    name: Build and Push Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Log in to Container Registry
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v4
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=sha
+          
+    - name: Build and push API Gateway
+      uses: docker/build-push-action@v4
+      id: build
+      with:
+        context: ./backend/api-gateway
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api-gateway:${{ steps.meta.outputs.version }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Build and push Auth Service
+      uses: docker/build-push-action@v4
+      with:
+        context: ./backend/auth-service
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/auth-service:${{ steps.meta.outputs.version }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Build and push Oracle Service
+      uses: docker/build-push-action@v4
+      with:
+        context: ./backend/oracle-service
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/oracle-service:${{ steps.meta.outputs.version }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Build and push Notification Service
+      uses: docker/build-push-action@v4
+      with:
+        context: ./backend/notification-service
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/notification-service:${{ steps.meta.outputs.version }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Build and push Farmer Dashboard
+      uses: docker/build-push-action@v4
+      with:
+        context: ./frontend/farmer-dashboard
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/farmer-dashboard:${{ steps.meta.outputs.version }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Build and push Processor Portal
+      uses: docker/build-push-action@v4
+      with:
+        context: ./frontend/processor-portal
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/processor-portal:${{ steps.meta.outputs.version }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Build and push IoT Gateway
+      uses: docker/build-push-action@v4
+      with:
+        context: ./iot/gateway-software
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/iot-gateway:${{ steps.meta.outputs.version }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # Deploy to staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        method: kubeconfig
+        kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
+        
+    - name: Deploy to Kubernetes
+      run: |
+        # Update image tags in deployment files
+        sed -i "s|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api-gateway:.*|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api-gateway:${{ needs.build-and-push.outputs.image-tag }}|g" infrastructure/kubernetes/staging/api-gateway.yaml
+        sed -i "s|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/auth-service:.*|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/auth-service:${{ needs.build-and-push.outputs.image-tag }}|g" infrastructure/kubernetes/staging/auth-service.yaml
+        sed -i "s|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/farmer-dashboard:.*|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/farmer-dashboard:${{ needs.build-and-push.outputs.image-tag }}|g" infrastructure/kubernetes/staging/farmer-dashboard.yaml
+        
+        # Apply deployments
+        kubectl apply -f infrastructure/kubernetes/staging/
+        
+        # Wait for rollout
+        kubectl rollout status deployment/api-gateway -n agrochain-staging --timeout=300s
+        kubectl rollout status deployment/auth-service -n agrochain-staging --timeout=300s
+        kubectl rollout status deployment/farmer-dashboard -n agrochain-staging --timeout=300s
+        
+    - name: Run smoke tests
+      run: |
+        # Wait for services to be ready
+        sleep 60
+        
+        # Run smoke tests
+        cd tests/smoke
+        npm install
+        npm run test -- --env=staging
+        
+    - name: Notify Slack
+      uses: 8398a7/action-slack@v3
+      if: always()
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        fields: repo,message,commit,author,action,eventName,ref,workflow
+
+  # Deploy to production
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build-and-push, deploy-staging]
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        method: kubeconfig
+        kubeconfig: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+        
+    - name: Deploy to Kubernetes
+      run: |
+        # Update image tags in deployment files
+        sed -i "s|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api-gateway:.*|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api-gateway:${{ needs.build-and-push.outputs.image-tag }}|g" infrastructure/kubernetes/production/api-gateway.yaml
+        sed -i "s|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/auth-service:.*|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/auth-service:${{ needs.build-and-push.outputs.image-tag }}|g" infrastructure/kubernetes/production/auth-service.yaml
+        sed -i "s|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/farmer-dashboard:.*|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/farmer-dashboard:${{ needs.build-and-push.outputs.image-tag }}|g" infrastructure/kubernetes/production/farmer-dashboard.yaml
+        
+        # Apply deployments
+        kubectl apply -f infrastructure/kubernetes/production/
+        
+        # Wait for rollout
+        kubectl rollout status deployment/api-gateway -n agrochain-production --timeout=600s
+        kubectl rollout status deployment/auth-service -n agrochain-production --timeout=600s
+        kubectl rollout status deployment/farmer-dashboard -n agrochain-production --timeout=600s
+        
+    - name: Run smoke tests
+      run: |
+        # Wait for services to be ready
+        sleep 120
+        
+        # Run smoke tests
+        cd tests/smoke
+        npm install
+        npm run test -- --env=production
+        
+    - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        draft: false
+        prerelease: false
+        
+    - name: Notify Slack
+      uses: 8398a7/action-slack@v3
+      if: always()
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        fields: repo,message,commit,author,action,eventName,ref,workflow
+
+  # Deploy Smart Contracts
+  deploy-contracts:
+    name: Deploy Smart Contracts
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ env.RUST_VERSION }}
+        
+    - name: Install Soroban CLI
+      run: |
+        curl -L https://github.com/stellar/soroban-tools/releases/latest/download/soroban-cli-linux-x86_64.tar.gz | tar xz
+        sudo mv soroban /usr/local/bin/
+        
+    - name: Deploy contracts
+      run: |
+        cd contracts
+        chmod +x scripts/deploy.sh
+        ./scripts/deploy.sh
+      env:
+        STELLAR_NETWORK: ${{ secrets.STELLAR_NETWORK }}
+        STELLAR_SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+        
+    - name: Update contract addresses
+      run: |
+        # Update contract addresses in backend configuration
+        echo "Updating contract addresses in configuration..."
+        
+    - name: Notify Slack
+      uses: 8398a7/action-slack@v3
+      if: always()
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        message: "Smart contracts deployment completed"
+
+  # Database Migrations
+  migrate-database:
+    name: Run Database Migrations
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        
+    - name: Install dependencies
+      run: |
+        cd backend
+        npm ci
+        
+    - name: Run migrations
+      run: |
+        cd backend
+        npm run migrate:staging
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL_STAGING }}
+        
+    - name: Notify Slack
+      uses: 8398a7/action-slack@v3
+      if: always()
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        message: "Database migrations completed for staging"

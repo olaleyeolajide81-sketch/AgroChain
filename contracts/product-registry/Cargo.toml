@@ -1,0 +1,23 @@
+[package]
+name = "agrochain-product-registry"
+version = "1.0.0"
+edition = "2021"
+description = "Product Registry smart contract for AgroChain"
+authors = ["AgroChain Team <team@agrochain.io>"]
+license = "MIT"
+repository = "https://github.com/olaleyeolajide81-sketch/AgroChain"
+homepage = "https://agrochain.io"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+agrochain-shared = { path = "../shared" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
