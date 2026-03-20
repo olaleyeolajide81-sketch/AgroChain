@@ -1,0 +1,54 @@
+{
+  "name": "@agrochain/frontend",
+  "version": "1.0.0",
+  "description": "Frontend applications for AgroChain",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:farmer\" \"npm run dev:processor\" \"npm run dev:distributor\" \"npm run dev:consumer\"",
+    "dev:farmer": "cd packages/farmer-dashboard && npm run dev",
+    "dev:processor": "cd packages/processor-portal && npm run dev",
+    "dev:distributor": "cd packages/distributor-platform && npm run dev",
+    "dev:consumer": "cd packages/consumer-app && npm run dev",
+    "build": "npm run build:farmer && npm run build:processor && npm run build:distributor && npm run build:consumer",
+    "build:farmer": "cd packages/farmer-dashboard && npm run build",
+    "build:processor": "cd packages/processor-portal && npm run build",
+    "build:distributor": "cd packages/distributor-platform && npm run build",
+    "build:consumer": "cd packages/consumer-app && npm run build",
+    "test": "npm run test:farmer && npm run test:processor && npm run test:distributor && npm run test:consumer",
+    "test:farmer": "cd packages/farmer-dashboard && npm run test",
+    "test:processor": "cd packages/processor-portal && npm run test",
+    "test:distributor": "cd packages/distributor-platform && npm run test",
+    "test:consumer": "cd packages/consumer-app && npm run test",
+    "lint": "npm run lint:farmer && npm run lint:processor && npm run lint:distributor && npm run lint:consumer",
+    "lint:farmer": "cd packages/farmer-dashboard && npm run lint",
+    "lint:processor": "cd packages/processor-portal && npm run lint",
+    "lint:distributor": "cd packages/distributor-platform && npm run lint",
+    "lint:consumer": "cd packages/consumer-app && npm run lint",
+    "format": "prettier --write \"packages/**/*.{ts,tsx,js,jsx,json,css,md}\"",
+    "clean": "npm run clean:farmer && npm run clean:processor && npm run clean:distributor && npm run clean:consumer",
+    "clean:farmer": "cd packages/farmer-dashboard && rm -rf node_modules dist",
+    "clean:processor": "cd packages/processor-portal && rm -rf node_modules dist",
+    "clean:distributor": "cd packages/distributor-platform && rm -rf node_modules dist",
+    "clean:consumer": "cd packages/consumer-app && rm -rf node_modules dist"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "concurrently": "^8.2.2",
+    "eslint": "^8.54.0",
+    "eslint-plugin-react": "^7.33.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "prettier": "^3.1.0",
+    "typescript": "^5.3.0",
+    "vite": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  }
+}

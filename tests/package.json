@@ -1,0 +1,35 @@
+{
+  "name": "@agrochain/tests",
+  "version": "1.0.0",
+  "description": "Testing framework for AgroChain",
+  "scripts": {
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "jest --config=jest.unit.config.js",
+    "test:integration": "jest --config=jest.integration.config.js",
+    "test:e2e": "playwright test",
+    "test:performance": "k6 run --out json=results.json performance/load-test.js",
+    "test:contracts": "cd ../contracts && cargo test",
+    "test:watch": "jest --config=jest.unit.config.js --watch",
+    "test:coverage": "jest --config=jest.unit.config.js --coverage",
+    "test:ci": "npm run test:unit -- --ci && npm run test:integration -- --ci",
+    "lint": "eslint . --ext .js,.ts",
+    "lint:fix": "eslint . --ext .js,.ts --fix"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@types/jest": "^29.5.8",
+    "@types/node": "^20.9.0",
+    "@types/supertest": "^2.0.16",
+    "axios": "^1.6.0",
+    "eslint": "^8.54.0",
+    "jest": "^29.7.0",
+    "k6": "^0.47.0",
+    "supertest": "^6.3.3",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  }
+}
